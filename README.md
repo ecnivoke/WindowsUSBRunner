@@ -7,4 +7,4 @@
 
 #### Commands
  `--autorun [file]`
- 	*To define your own file to be ran, multiple files are allowed seperated by a comma.*
+ >*To define your own file to be ran, multiple files are allowed seperated by a comma.*
