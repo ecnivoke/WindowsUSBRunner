@@ -5,48 +5,89 @@
 #include <setupapi.h>
 #include <cfgmgr32.h>
 #include <tchar.h>
+#include <vector>
+#include <sstream>
+#include <filesystem>
 
 #pragma comment (lib, "setupapi.lib")
 
 #define MAX_PATH 260
 
 char getUSBLetter();
+void splitString(std::string sString, std::vector<std::string>& vsOut);
 
-std::string allDrives = { 0 };
+std::string sAllDrives = { 0 };
 
-int main()
+int main(int argc, char** argv)
 {
-    char szDriveLetter = getUSBLetter();
-    std::string cmd = "cmd.exe START CMD /C \"";
-
+    char driveLetter = getUSBLetter();
+    const char szCmd[] = "cmd.exe START CMD /C \"";
+    std::vector<std::string> vsFullFileNames;
+    
     STARTUPINFO si = { 0 };
     PROCESS_INFORMATION pi = { 0 };
 
     si.cb = sizeof(si);
 
+    if (argc > 1)
+    {
+        for (int i = 0; i < argc; i++)
+        {
+            std::string sArgv = std::string(argv[i]);
+
+            if (sArgv == "--autorun")
+            {
+                if (argv[i + 1])
+                    splitString(std::string(argv[i + 1]), vsFullFileNames);
+                else
+                {
+                    std::cerr << "Error: Expected more parameters" << std::endl;
+                    return 0;
+                }  
+            }
+        }
+    }
+
+    if (!vsFullFileNames.size())
+        vsFullFileNames.push_back("WindowsAutoRun.bat");
+
     while (true)
     {
-        szDriveLetter = getUSBLetter();
-        if (szDriveLetter != '\0')
+        driveLetter = getUSBLetter();
+        if (driveLetter != '\0')
         {
-            std::cout << szDriveLetter << std::endl;
-
-            cmd.push_back(szDriveLetter);
-            cmd.append(":\\WindowsAutoRun.bat\"");
-
-            std::wstring wide_string = std::wstring(cmd.begin(), cmd.end());
-            wchar_t result[1024] = { 0 };
-
-            wcscat_s(result, wide_string.c_str());
-
-            if (!CreateProcess(NULL, result, NULL, NULL, false, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi))
+            for (UINT i = 0; i < vsFullFileNames.size(); i++)
             {
-                std::cout << "Could not open process " << GetLastError() << std::endl;
+                std::ostringstream ossBaseDir;
+                std::ostringstream ossFullPath;
+                bool bFileExists = false;
+
+                ossBaseDir << driveLetter << ":\\";
+                ossFullPath << ossBaseDir.str() << vsFullFileNames[i];
+
+                for (const auto& entry : std::filesystem::directory_iterator(ossBaseDir.str()))
+                    if (entry.path() == ossFullPath.str())
+                        bFileExists = true;
+
+                if (!bFileExists)
+                    continue;
+
+                std::string sTempCmd = szCmd;
+
+                sTempCmd.append(ossFullPath.str());
+                sTempCmd.append("\"");
+
+                std::wstring wcString = std::wstring(sTempCmd.begin(), sTempCmd.end());
+                wchar_t wcFinalCmd[1024] = { 0 };
+
+                wcscat_s(wcFinalCmd, wcString.c_str());
+
+                if (!CreateProcess(NULL, wcFinalCmd, NULL, NULL, false, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi))
+                    std::cerr << "Could not open process for: " << vsFullFileNames[i] << "\nError: " << GetLastError() << std::endl;
             }
         }
         Sleep(1000);
     }
-
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
@@ -61,43 +102,47 @@ char getUSBLetter()
         return '\0';
 
     char drive = { 0 };
-    UINT isUSB[] = { 0 };
-    UINT memberIndex = 0;
-    CONFIGRET status = { 0 };
-    TCHAR szLocation[] = { 0 };
+    UINT uIsUSB[] = { 0 };
+    UINT uMemberIndex = 0;
     char szLogicalDrives[MAX_PATH] = { 0 };
     SP_DEVINFO_DATA DeviceInfoData = { 0 };
-    TCHAR szDeviceInstanceID[MAX_DEVICE_ID_LEN] = { 0 };
 
     DeviceInfoData.cbSize = sizeof(DeviceInfoData);
 
-    while (SetupDiEnumDeviceInfo(hDevInfo, memberIndex, &DeviceInfoData))
+    while (SetupDiEnumDeviceInfo(hDevInfo, uMemberIndex, &DeviceInfoData))
     {
-        SetupDiGetDeviceRegistryProperty(hDevInfo, &DeviceInfoData, SPDRP_REMOVAL_POLICY, NULL, (BYTE*)isUSB, sizeof(isUSB), NULL); // Get driver type
-        if (*isUSB == CM_REMOVAL_POLICY_EXPECT_SURPRISE_REMOVAL) 
+        SetupDiGetDeviceRegistryProperty(hDevInfo, &DeviceInfoData, SPDRP_REMOVAL_POLICY, NULL, (BYTE*)uIsUSB, sizeof(uIsUSB), NULL); // Get driver type
+        if (*uIsUSB == CM_REMOVAL_POLICY_EXPECT_SURPRISE_REMOVAL)
         {
             DWORD dwResult = GetLogicalDriveStringsA(MAX_PATH, szLogicalDrives);
 
-            std::string currentDrives = "";
+            std::string sCurrentDrives = "";
 
             for (UINT i = 0; i < dwResult; i++)
             {
                 if (szLogicalDrives[i] > 64 && szLogicalDrives[i] < 90)
                 {
-                    currentDrives.append(1, szLogicalDrives[i]);
+                    sCurrentDrives.append(1, szLogicalDrives[i]);
 
-                    if (allDrives.find(szLogicalDrives[i]) > 100)
-                    {
+                    if (sAllDrives.find(szLogicalDrives[i]) > 100)
                         drive = szLogicalDrives[i];
-                    }
                 }
             }
-            allDrives = currentDrives;
+            sAllDrives = sCurrentDrives;
 
             return drive;
         }
-        memberIndex++;
+        uMemberIndex++;
     }
     SetupDiDestroyDeviceInfoList(hDevInfo);
     return '\0';
+}
+
+void splitString(std::string sString, std::vector<std::string>& vsOut)
+{
+    std::istringstream issExtensions(sString);
+    std::string sTemp = { 0 };
+
+    while (std::getline(issExtensions, sTemp, ','))
+        vsOut.push_back(sTemp);
 }
