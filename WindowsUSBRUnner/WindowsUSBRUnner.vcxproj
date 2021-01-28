@@ -24,6 +24,7 @@
     <ProjectGuid>{04888083-c68b-480a-bbfa-010a39aed977}</ProjectGuid>
     <RootNamespace>WindowsUSBRUnner</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>WindowsUSBRunner</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
