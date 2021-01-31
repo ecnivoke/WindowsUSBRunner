@@ -2,54 +2,49 @@
 #include <windows.h>
 #include <string>
 #include <iostream>
+#include <fstream>
 #include <setupapi.h>
 #include <cfgmgr32.h>
-#include <tchar.h>
+#include <wchar.h>
 #include <vector>
 #include <sstream>
 #include <filesystem>
+#include <algorithm>
 
 #pragma comment (lib, "setupapi.lib")
 
 #define MAX_PATH 260
 
 char getUSBLetter();
-void splitString(std::string sString, std::vector<std::string>& vsOut);
+void parseFileNamesW(std::wstring sString, std::vector<std::wstring>& vsOut);
+wchar_t* getCmdOptionW(wchar_t** begin, wchar_t** end, const std::wstring& option);
+bool cmdOptionExists(wchar_t** begin, wchar_t** end, const std::wstring& option);
 
 std::string sAllDrives = { 0 };
 
-int main(int argc, char** argv)
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, int nCmdShow)
 {
+    int argc = 0;
+    LPWSTR* szArgv = CommandLineToArgvW(GetCommandLineW(), &argc);
     char driveLetter = getUSBLetter();
-    const char szCmd[] = "cmd.exe START CMD /C \"";
-    std::vector<std::string> vsFullFileNames;
-    
-    STARTUPINFO si = { 0 };
-    PROCESS_INFORMATION pi = { 0 };
-
-    si.cb = sizeof(si);
+    const wchar_t wcCmd[] = L"cmd.exe START CMD /C \"";
+    bool bNewConsole = false;
+    std::vector<std::wstring> vsFullFileNames;
+    std::vector<STARTUPINFO> vStartupInfo;
+    std::vector<PROCESS_INFORMATION> vProcessInfo;
 
     if (argc > 1)
     {
-        for (int i = 0; i < argc; i++)
-        {
-            std::string sArgv = std::string(argv[i]);
+        wchar_t* wcFiles = getCmdOptionW(szArgv, szArgv + argc, L"--autorun");
+        if(wcFiles)
+            parseFileNamesW(std::wstring(wcFiles), vsFullFileNames);
 
-            if (sArgv == "--autorun")
-            {
-                if (argv[i + 1])
-                    splitString(std::string(argv[i + 1]), vsFullFileNames);
-                else
-                {
-                    std::cerr << "Error: Expected more parameters" << std::endl;
-                    return 0;
-                }  
-            }
-        }
+        bNewConsole = cmdOptionExists(szArgv, szArgv + argc, L"--new-console");
     }
+    LocalFree(szArgv);
 
     if (!vsFullFileNames.size())
-        vsFullFileNames.push_back("WindowsAutoRun.bat");
+        vsFullFileNames.push_back(L"WindowsAutoRun.bat");
 
     while (true)
     {
@@ -58,39 +53,49 @@ int main(int argc, char** argv)
         {
             for (UINT i = 0; i < vsFullFileNames.size(); i++)
             {
-                std::ostringstream ossBaseDir;
-                std::ostringstream ossFullPath;
+                std::wostringstream ossFullPath;
                 bool bFileExists = false;
 
-                ossBaseDir << driveLetter << ":\\";
-                ossFullPath << ossBaseDir.str() << vsFullFileNames[i];
+                ossFullPath << driveLetter << L":\\" << vsFullFileNames[i].c_str();
 
-                for (const auto& entry : std::filesystem::directory_iterator(ossBaseDir.str()))
-                    if (entry.path() == ossFullPath.str())
-                        bFileExists = true;
+                bFileExists = std::filesystem::directory_entry(ossFullPath.str()).exists();
 
                 if (!bFileExists)
                     continue;
 
-                std::string sTempCmd = szCmd;
+                STARTUPINFO si = { 0 };
+                PROCESS_INFORMATION pi = { 0 };
 
-                sTempCmd.append(ossFullPath.str());
-                sTempCmd.append("\"");
+                vStartupInfo.push_back(si);
+                vProcessInfo.push_back(pi);
 
-                std::wstring wcString = std::wstring(sTempCmd.begin(), sTempCmd.end());
+                si.cb = sizeof(si);
+
+                std::wstring wsTempCmd = wcCmd;
+
+                wsTempCmd.append(ossFullPath.str());
+                wsTempCmd.append(L"\"");
+
                 wchar_t wcFinalCmd[1024] = { 0 };
+                wcscat_s(wcFinalCmd, wsTempCmd.c_str());
 
-                wcscat_s(wcFinalCmd, wcString.c_str());
+                if (!CreateProcess(NULL, wcFinalCmd, NULL, NULL, false, (bNewConsole) ? CREATE_NEW_CONSOLE : CREATE_NO_WINDOW | DETACHED_PROCESS, NULL, NULL, &vStartupInfo[i], &vProcessInfo[i]))
+                {
+                    wchar_t msg[] = L"Could not open process for: ";
+                    wcscat_s(msg, vsFullFileNames[i].c_str());
 
-                if (!CreateProcess(NULL, wcFinalCmd, NULL, NULL, false, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi))
-                    std::cerr << "Could not open process for: " << vsFullFileNames[i] << "\nError: " << GetLastError() << std::endl;
+                    MessageBox(NULL, msg, L"Process error", MB_OK);
+                }
             }
         }
         Sleep(1000);
     }
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
 
+    for (auto& pi : vProcessInfo)
+    {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    }
     return 0;
 }
 
@@ -112,7 +117,7 @@ char getUSBLetter()
     while (SetupDiEnumDeviceInfo(hDevInfo, uMemberIndex, &DeviceInfoData))
     {
         SetupDiGetDeviceRegistryProperty(hDevInfo, &DeviceInfoData, SPDRP_REMOVAL_POLICY, NULL, (BYTE*)uIsUSB, sizeof(uIsUSB), NULL); // Get driver type
-        if (*uIsUSB == CM_REMOVAL_POLICY_EXPECT_SURPRISE_REMOVAL)
+        if (uIsUSB[0] == CM_REMOVAL_POLICY_EXPECT_SURPRISE_REMOVAL)
         {
             DWORD dwResult = GetLogicalDriveStringsA(MAX_PATH, szLogicalDrives);
 
@@ -138,11 +143,26 @@ char getUSBLetter()
     return '\0';
 }
 
-void splitString(std::string sString, std::vector<std::string>& vsOut)
+void parseFileNamesW(std::wstring wcString, std::vector<std::wstring>& vsOut)
 {
-    std::istringstream issExtensions(sString);
-    std::string sTemp = { 0 };
+    std::wistringstream wcisFiles(wcString);
+    std::wstring wcTemp = { 0 };
 
-    while (std::getline(issExtensions, sTemp, ','))
-        vsOut.push_back(sTemp);
+    while (std::getline(wcisFiles, wcTemp, L','))
+        vsOut.push_back(wcTemp);
+}
+
+wchar_t* getCmdOptionW(wchar_t** begin, wchar_t** end, const std::wstring& option)
+{
+    wchar_t** itr = std::find(begin, end, option);
+    if (itr != end && ++itr != end)
+    {
+        return *itr;
+    }
+    return 0;
+}
+
+bool cmdOptionExists(wchar_t** begin, wchar_t** end, const std::wstring& option)
+{
+    return std::find(begin, end, option) != end;
 }
