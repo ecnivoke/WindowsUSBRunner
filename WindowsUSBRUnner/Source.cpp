@@ -53,17 +53,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         {
             for (UINT i = 0; i < vsFullFileNames.size(); i++)
             {
-                std::wostringstream ossBaseDir;
                 std::wostringstream ossFullPath;
                 bool bFileExists = false;
 
-                ossBaseDir << driveLetter << ":\\";
-                ossFullPath << ossBaseDir.str() << vsFullFileNames[i].c_str();
+                ossFullPath << driveLetter << L":\\" << vsFullFileNames[i].c_str();
 
-                for (const auto& entry : std::filesystem::directory_iterator(ossBaseDir.str()))
-                    if (entry.path() == ossFullPath.str())
-                        bFileExists = true;
-                    
+                bFileExists = std::filesystem::directory_entry(ossFullPath.str()).exists();
+
                 if (!bFileExists)
                     continue;
 
@@ -82,8 +78,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
                 wchar_t wcFinalCmd[1024] = { 0 };
                 wcscat_s(wcFinalCmd, wsTempCmd.c_str());
-
-                std::wcout << wcFinalCmd << std::endl;
 
                 if (!CreateProcess(NULL, wcFinalCmd, NULL, NULL, false, (bNewConsole) ? CREATE_NEW_CONSOLE : CREATE_NO_WINDOW | DETACHED_PROCESS, NULL, NULL, &vStartupInfo[i], &vProcessInfo[i]))
                 {
